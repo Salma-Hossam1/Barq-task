@@ -95,3 +95,4 @@ Do not use docker compose down to reset the runtime challenge.
 Outside the recorded challenge, docker compose -p barq-assessment down stops this lab.
 Do not use --volumes during persistence tests. Avoid global Docker prune/cleanup commands.
 Back up anything you need before removing containers; investigate whether data actually persists.
+# Barq-task
