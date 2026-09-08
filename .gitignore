@@ -10,3 +10,7 @@ evidence/local/
 .assessment/
 backups/
 *.dump
+
+# Local runtime secrets
+config/app.env
+config/postgres.env
