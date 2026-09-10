@@ -966,3 +966,70 @@ evidence had been recorded.
 
 Phase 2 implementation and subsequent runtime verification will be recorded
 as new chronological entries rather than rewriting the Phase 1 evidence.
+
+
+---
+
+## Entry 19 / 9 Sep / 4:00
+
+* Symptom:
+
+  * `/ready` returned `503 SERVICE UNAVAILABLE`.
+  * The response reported `postgres: unavailable` while `redis: ready`.
+
+* Hypothesis:
+
+  * The application could reach the PostgreSQL service, but the database credentials used by the application might not match the credentials configured for PostgreSQL.
+
+* Command or test:
+
+  * Checked PostgreSQL container logs and application database configuration.
+  * Compared the password configured in `config/app.env` with the PostgreSQL password in `config/postgres.env` without exposing either value.
+
+* Actual output:
+
+  * PostgreSQL logs showed:
+    `FATAL: password authentication failed for user "barq_app"`
+  * PostgreSQL was listening on port `5432` and the database was otherwise healthy.
+  * Safe credential comparison reported:
+    `PASSWORDS DO NOT MATCH`
+  * PostgreSQL logs also showed:
+    `PostgreSQL Database directory appears to contain a database; Skipping initialization`
+
+* Failed attempt and what changed your thinking:
+
+  * Attempted to synchronize the existing PostgreSQL role password with the configured PostgreSQL password using `ALTER ROLE`; PostgreSQL returned `ALTER ROLE`.
+  * A subsequent direct application database test still failed with password authentication errors.
+  * This showed that the existing database state and the application's configured `DATABASE_URL` were not yet synchronized, rather than indicating a PostgreSQL availability or networking problem.
+
+* Root cause:
+
+  * Credential drift between the application's `DATABASE_URL` and the PostgreSQL credential.
+  * The PostgreSQL named volume was already initialized, so changing PostgreSQL environment variables did not automatically recreate or reinitialize the existing database credentials.
+
+* Fix:
+
+  * Synchronized the password used by the application's `DATABASE_URL` with the PostgreSQL credential.
+  * Recreated only `app-01` and `app-02` so they loaded the corrected environment configuration:
+    `docker compose up -d --force-recreate app-01 app-02`
+  * The PostgreSQL volume was preserved.
+
+* Retest evidence:
+
+  * Direct application database test:
+    `DATABASE: SUCCESS`
+  * `/ready` subsequently returned:
+    `HTTP/1.1 200 OK`
+  * Response reported:
+    `postgres: ready`
+    `redis: ready`
+  * The application was therefore able to authenticate to PostgreSQL successfully.
+
+* Related commit:
+
+  * Pending — commit will be recorded after the troubleshooting-journal update is committed.
+
+* Remaining uncertainty:
+
+  * No remaining runtime uncertainty for this specific PostgreSQL authentication failure.
+  * The persistence behavior of the named PostgreSQL volume will be verified separately during the required persistence test.
