@@ -1033,3 +1033,52 @@ as new chronological entries rather than rewriting the Phase 1 evidence.
 
   * No remaining runtime uncertainty for this specific PostgreSQL authentication failure.
   * The persistence behavior of the named PostgreSQL volume will be verified separately during the required persistence test.
+
+
+
+### 20. Backend failure and recovery verification
+
+**Scenario:**
+The task requires the reverse proxy to continue serving traffic when one Flask backend becomes unavailable, then resume using the recovered backend.
+
+**Hypothesis:**
+NGINX should continue routing requests to the healthy application instance when one upstream is unavailable. After recovery, the stopped backend should become eligible to receive traffic again.
+
+**Test performed:**
+
+```bash
+./failure_test.py
+```
+
+**Result:**
+
+```text
+Normal traffic: 10/10 successful; instances=['app-01', 'app-02']; errors=0
+
+Failure traffic: 20/20 successful; instances=['app-02']; errors=0
+
+PASS: app-01 recovered and is healthy
+PASS: app-01 served traffic after recovery (attempt 1)
+
+RESULT: PASS
+```
+
+**Evidence / interpretation:**
+
+* Before failure, traffic successfully reached both `app-01` and `app-02`.
+* After stopping `app-01`, all 20 requests succeeded and were served by `app-02`.
+* No request errors were observed during the failure window.
+* `app-01` was restarted and returned to a healthy state.
+* The recovered `app-01` received traffic again on the first recovery attempt.
+
+**Finding:**
+The failure scenario was handled successfully. No additional runtime fault was identified by this test.
+
+**Fix:**
+No additional fix was required. The existing NGINX upstream configuration and application health/recovery behavior satisfied the failure-handling requirement.
+
+**Retest:**
+`./failure_test.py` completed with `RESULT: PASS`.
+
+**Commit:**
+The verification changes will be recorded in the corresponding Git commit.
