@@ -1,0 +1,225 @@
+name: BARQ Assessment CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+
+jobs:
+  validate:
+
+    # GitHub creates a clean Linux machine for this job.
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # =========================================================
+      # 1. CHECKOUT
+      # =========================================================
+      # Get the repository source code onto the GitHub runner.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # =========================================================
+      # 2. CREATE TEMPORARY CI CONFIGURATION
+      # =========================================================
+      # Our real local config files contain credentials and must
+      # NOT be committed to Git , so CI creates temp configs files fot this particular run (It is only testing of integration , not need to be actual)
+      # The password is generated randomly and exists only for this disposable CI environment.
+      - name: Prepare temporary CI configuration
+        run: |
+          # Generate a random CI-only PostgreSQL password.
+          # openssl is available on the GitHub Ubuntu runner.
+          # -hex produces characters that are safe inside the
+          # PostgreSQL connection URL.
+          CI_DB_PASSWORD="$(openssl rand -hex 32)"
+
+          mkdir -p config
+
+          # Configuration consumed by the Flask application.
+          cat > config/app.env <<EOF
+          DATABASE_URL=postgresql://barq_app:${CI_DB_PASSWORD}@postgres:5432/barq_tasks
+          REDIS_URL=redis://redis:6379/0
+          EOF
+
+          # Configuration consumed by PostgreSQL.
+          cat > config/postgres.env <<EOF
+          POSTGRES_USER=barq_app
+          POSTGRES_DB=barq_tasks
+          POSTGRES_PASSWORD=${CI_DB_PASSWORD}
+          EOF
+
+
+      # =========================================================
+      # 3. SYNTAX AND CONFIGURATION CHECKS
+      # =========================================================
+      # Before running the actual environment, catch cheap
+      # configuration/syntax problems first.
+      #
+      # These checks answer different questions:
+      #
+      # compileall       -> Is the application Python syntax valid?
+      # py_compile       -> Are our Python scripts syntactically valid?
+      # bash -n           -> Are our Bash scripts syntactically valid?
+      # compose config    -> Is the Compose configuration valid?
+      #
+      - name: Syntax and Compose checks
+        run: |
+          # Check all Python source files under app/.
+          python -m compileall -q app
+
+          # Check our Python validation/test-related scripts.
+          python -m py_compile validate.py failure_test.py
+
+          # Check Bash syntax without executing the scripts.
+          bash -n backup.sh restore.sh
+
+          # Ask Docker Compose to parse and resolve the Compose
+          # configuration without starting any containers.
+          docker compose config --quiet
+
+
+      # =========================================================
+      # 4. APPLICATION TESTS
+      # =========================================================
+      # These tests are about the Flask APPLICATION itself.
+      #
+      # tests/test_app.py uses FakeDependencies
+      - name: Install application dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+
+      - name: Run application contract tests
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+
+      # =========================================================
+      # 5. BUILD THE APPLICATION / INFRASTRUCTURE IMAGES
+      # =========================================================
+      # Now we test whether the repository can actually be
+      # packaged into the Docker environment.
+      #
+      # This is important because passing Python tests alone does
+      # NOT prove that the Dockerfile works.
+      #
+      # For example, a broken COPY, dependency installation,
+      # working directory, USER, or CMD could still make the
+      # container unusable.
+      #
+      - name: Build Docker images
+        run: docker compose build
+
+
+      # =========================================================
+      # 6. START THE REAL COMPOSE ENVIRONMENT
+      # =========================================================
+      # Start the actual multi-container system.
+      #
+      - name: Start services
+        run: docker compose up -d
+
+
+      # =========================================================
+      # 7. WAIT FOR REAL READINESS
+      # =========================================================
+      # A running container is NOT necessarily a ready service.
+      #
+      # We therefore wait for:
+      #
+      #   PostgreSQL -> healthy
+      #   Redis      -> healthy
+      #   app-01     -> healthy
+      #   app-02     -> healthy
+      #
+      # The loop has a fixed maximum of 30 attempts.
+      # Therefore CI cannot hang forever.
+      #
+      - name: Wait for services to become healthy
+        run: |
+          for i in {1..30}; do
+
+            POSTGRES_HEALTH="$(docker inspect \
+              --format '{{.State.Health.Status}}' postgres 2>/dev/null || true)"
+
+            REDIS_HEALTH="$(docker inspect \
+              --format '{{.State.Health.Status}}' redis 2>/dev/null || true)"
+
+            APP01_HEALTH="$(docker inspect \
+              --format '{{.State.Health.Status}}' app-01 2>/dev/null || true)"
+
+            APP02_HEALTH="$(docker inspect \
+              --format '{{.State.Health.Status}}' app-02 2>/dev/null || true)"
+
+            echo "Attempt $i/30:"
+            echo "  PostgreSQL: $POSTGRES_HEALTH"
+            echo "  Redis:      $REDIS_HEALTH"
+            echo "  app-01:     $APP01_HEALTH"
+            echo "  app-02:     $APP02_HEALTH"
+
+            if [[ "$POSTGRES_HEALTH" == "healthy" &&
+                  "$REDIS_HEALTH" == "healthy" &&
+                  "$APP01_HEALTH" == "healthy" &&
+                  "$APP02_HEALTH" == "healthy" ]]; then
+
+              echo "All required services are healthy."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "ERROR: Services did not become healthy in time."
+
+          docker compose ps
+
+          exit 1
+
+
+      # =========================================================
+      # 8. FULL ENVIRONMENT VALIDATION
+      # =========================================================
+      # validate.py:
+      # It validates the integration of:
+      #
+      #     Client
+      #       ↓
+      #     NGINX
+      #       ↓
+      #     Flask instances
+      #       ↓
+      #     PostgreSQL / Redis
+      #
+      # It also checks deployment requirements such as network
+      # isolation and prohibited host ports.
+      #
+      - name: Run integration validation
+        run: ./validate.py
+
+
+      # =========================================================
+      # 9. SHOW LOGS WHEN SOMETHING FAILS
+      # =========================================================
+      # The purpose is to make a CI failure diagnosable rather than simply showing "job failed".
+      - name: Show service state on failure
+        if: failure()
+        run: |
+          echo "=== Docker Compose status ==="
+          docker compose ps
+
+          echo "=== Container logs ==="
+          docker compose logs --no-color
+
+
+      # =========================================================
+      # 10. ALWAYS CLEAN UP
+      # =========================================================
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+        
