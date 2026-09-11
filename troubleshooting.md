@@ -1082,3 +1082,40 @@ No additional fix was required. The existing NGINX upstream configuration and ap
 
 **Commit:**
 The verification changes will be recorded in the corresponding Git commit.
+
+
+## 21. PostgreSQL backup and restore verification
+
+**Scenario:** Verify that the PostgreSQL backup and restore scripts recover database state correctly.
+
+**Test:** Created `backup-test-before-restore`, created a PostgreSQL custom-format backup, then created `backup-test-after-backup`. Stopped `app-01` and `app-02`, restored the exact backup file, restarted the applications, and queried `/records`.
+
+**Result:** The record that existed before the backup remained after restore, while `backup-test-after-backup` was absent. This proves that the restore returned PostgreSQL to the state captured by the backup.
+
+**Additional evidence:** `pg_restore --list` successfully inspected the generated custom-format dump and showed the `records` table, sequence, table data, and constraints.
+
+**Note:** A subsequent `validate.py` run created a new `validator-test` record. That record was created after the restore and is not part of the restore evidence.
+
+**Fix:** Implemented `backup.sh` using `pg_dump --format=custom` and `restore.sh` using `pg_restore`.
+
+**Retest:** Backup and restore completed successfully and database state matched the backup point.
+
+## 22. PostgreSQL persistence across container recreation
+
+**Scenario:** Verify that PostgreSQL data survives container recreation when the named volume is preserved.
+
+**Test:** Created `persistence-test-before-recreate` (record ID 9), then ran:
+
+```bash
+docker compose up -d --force-recreate postgres app-01 app-02
+```
+
+No `docker compose down -v` or volume deletion was performed.
+
+**Result:** PostgreSQL returned to healthy state and the record with ID 9 remained available through `GET /records`.
+
+**Finding:** PostgreSQL data is persisted outside the container lifecycle through the named `postgres-data` volume.
+
+**Retest:** The record remained after PostgreSQL and both application containers were recreated.
+
+**Evidence:** Before recreation the record was present; after recreation the same record was still present.
