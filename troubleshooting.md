@@ -37,23 +37,12 @@ The original historical logs under `logs/` are preserved unchanged.
   The Docker healthcheck endpoint does not match the application's
   implemented health endpoint.
 
-- Fix:
-  Planned during Phase 1: change the healthcheck endpoint from `/healthz` to
-  `/health`.
+- Fix: Updated the application healthcheck from /healthz to the implemented /health endpoint.
 
-  The implementation was deferred until after the investigation.
+- Retest evidence: docker compose ps showed both application containers as healthy. ./validate.py subsequently verified the application health endpoint successfully.
 
-- Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: Docker reports the application containers as healthy
-  and `/health` returns HTTP 200.
-
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Final runtime health status must be confirmed after the Phase 2 fix.
+- Commit: 059cef5 — fix: repair container networking and runtime configuration
+Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -108,23 +97,12 @@ The original historical logs under `logs/` are preserved unchanged.
   The Flask applications bind to `127.0.0.1`, making them accessible only
   inside their own containers.
 
-- Fix:
-  Planned during Phase 1: bind the application server to `0.0.0.0:8080`.
+- Fix: Changed APP_HOST from 127.0.0.1 to 0.0.0.0 so the Flask service listens on the container network interface and  can accept connections from NGINX.
 
-- Retest evidence:
-  Not performed during Phase 1.
+- Retest evidence: The application became reachable through the NGINX proxy, and ./validate.py successfully exercised  the public endpoints.
 
-  Planned verification from NGINX:
-
-  `wget -S -O- http://app-01:8080/health`
-
-  `wget -S -O- http://app-02:8080/health`
-
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Final backend connectivity must be confirmed after the binding change.
+- Commit: 059cef5 — fix: repair container networking and runtime configuration
+  Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -162,20 +140,12 @@ The original historical logs under `logs/` are preserved unchanged.
   The `app-01` upstream was configured for port `8081` even though the
   application listens on port `8080`.
 
-- Fix:
-  Planned during Phase 1: configure both NGINX upstreams for port `8080`.
+- Fix: Corrected the NGINX upstream configuration so both application instances use port 8080, matching the Flask application configuration.
 
-- Retest evidence:
-  Not performed during Phase 1.
+- Retest evidence: NGINX successfully routed requests to both app-01 and app-02. Repeated /instance requests and the failure/recovery test confirmed backend traffic was reaching the application instances.
 
-  Planned verification: NGINX successfully proxies requests to both backend
-  instances.
-
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Final proxying behavior must be confirmed after the upstream correction.
+- Commit: 059cef5 — fix: repair container networking and runtime configuration
+Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -216,23 +186,12 @@ The original historical logs under `logs/` are preserved unchanged.
   The application `DATABASE_URL` points to the wrong PostgreSQL container
   port.
 
-- Fix:
-  Planned during Phase 1: use the PostgreSQL service name and container port:
+- Fix: Corrected the PostgreSQL connection configuration to use the PostgreSQL service name postgres and container port 5432.
 
-  `postgres:5432`
+- Retest evidence: /ready successfully verified PostgreSQL connectivity, and /records successfully created and retrieved database records.
 
-- Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: a direct TCP test and the application's `/ready`
-  endpoint confirm PostgreSQL connectivity.
-
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Database readiness must be confirmed after the configuration change.
-
+- Commit: 059cef5 — fix: repair container networking and runtime configuration
+Verification: b7d99b7 — verify: implement automated environment validation
 ---
 
 ## Entry 5 — Application to Redis port mismatch
@@ -271,21 +230,14 @@ The original historical logs under `logs/` are preserved unchanged.
   The application `REDIS_URL` points to the wrong Redis container port.
 
 - Fix:
-  Planned during Phase 1: use:
-
-  `redis:6379`
+   Corrected the Redis connection configuration to use the Redis service name redis and container port 6379.
 
 - Retest evidence:
-  Not performed during Phase 1.
+  /ready successfully verified Redis connectivity and the application was able to perform its Redis-backed operations.
 
-  Planned verification: a direct TCP test and the application's `/ready`
-  endpoint confirm Redis connectivity.
-
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Redis readiness must be confirmed after the configuration change.
+- Commit:
+   059cef5 — fix: repair container networking and runtime configuration
+Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -322,22 +274,20 @@ The original historical logs under `logs/` are preserved unchanged.
   container port `80`.
 
 - Fix:
-  Planned during Phase 1: publish:
+  Corrected the NGINX port mapping so the host port maps to the container's NGINX listening port 80.
 
   `127.0.0.1:8080 -> nginx:80`
 
 - Retest evidence:
-  Not performed during Phase 1.
+  The public application became reachable through the configured host port, and the automated validation successfully exercised the public HTTP interface.
 
-  Planned verification:
 
   `curl http://localhost:8080/health`
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
+   059cef5 — fix: repair container networking and runtime configuration
 
-- Remaining uncertainty:
-  Final end-to-end HTTP routing must be confirmed after the mapping change.
+- Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -370,24 +320,23 @@ The original historical logs under `logs/` are preserved unchanged.
   `app-01`.
 
 - Fix:
-  Planned during Phase 1:
+  Assigned distinct INSTANCE_ID values: app-01 and app-02.
 
   `app-01 -> INSTANCE_ID=app-01`
 
   `app-02 -> INSTANCE_ID=app-02`
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: repeated requests through NGINX demonstrate responses
-  from both distinct instance IDs.
+    /instance returned the distinct backend identities, and the failure/recovery test confirmed that traffic continued through app-02 when app-01 was stopped and later returned to the recovered instance.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
+  059cef5 — fix: repair container networking and runtime configuration
 
 - Remaining uncertainty:
   Load-balancing behavior must be proven through repeated requests after
   the identity correction.
+
+- Verification: b7d99b7 and dbf808e
 
 ---
 
@@ -427,22 +376,18 @@ The original historical logs under `logs/` are preserved unchanged.
   NGINX has unnecessary access to the backend dependency network.
 
 - Fix:
-  Planned during Phase 1: attach NGINX only to the frontend network.
-
-  Applications remain connected to both frontend and backend networks.
+  Removed NGINX from the backend network. NGINX now connects only to frontend, while the applications connect to both frontend and backend.
 
 - Retest evidence:
-  Not performed during Phase 1.
+  The automated validator checks NGINX network membership and confirms that NGINX is not attached to the backend network.
 
   Planned verification: NGINX reaches the applications but does not have
   direct network access to PostgreSQL or Redis.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
+  059cef5 — fix: repair container networking and runtime configuration
 
-- Remaining uncertainty:
-  Final network membership and isolation must be verified after the Compose
-  network changes.
+- Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -480,15 +425,12 @@ The original historical logs under `logs/` are preserved unchanged.
   Only NGINX publishes host port `8080` initially.
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: `docker ps` shows only the NGINX host port publication.
+  docker compose ps and the automated validation confirmed that the internal services are not published on host ports.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
+  `059cef5 — fix: repair container networking and runtime configuration
 
-- Remaining uncertainty:
-  Final published-port state must be verified after the Compose changes.
+- Verification: b7d99b7 — verify: implement automated environment validation
 
 ---
 
@@ -517,20 +459,13 @@ The original historical logs under `logs/` are preserved unchanged.
   Restart policies had not been configured.
 
 - Fix:
-  Planned during Phase 1: configure appropriate restart policies according
-  to the service requirements.
+  Added the required restart policy to the application and supporting services using restart: "unless-stopped" for the application workload.
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: Compose configuration and container inspection show
-  the configured restart policy.
+  The final Compose configuration contains the configured restart policy and the services were recreated successfully using the corrected configuration.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  The final policy for each service must be verified after implementation.
+  059cef5 — fix: repair container networking and runtime configuration
 
 ---
 
@@ -561,20 +496,13 @@ The original historical logs under `logs/` are preserved unchanged.
   No resource limits were configured.
 
 - Fix:
-  Planned during Phase 1: define reasonable CPU and memory limits for the
-  services.
+ Added CPU and memory limits for the application, NGINX, PostgreSQL, and Redis services.
 
-- Retest evidence:
-  Not performed during Phase 1.
+Retest evidence:
+ The final Compose configuration contains explicit resource limits for each service.
 
-  Planned verification: Docker inspection shows the configured resource
-  limits.
-
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Final resource values must be verified against the Compose configuration.
+Commit: 059cef5 — fix:
+ repair container networking and runtime configuration
 
 ---
 
@@ -608,20 +536,18 @@ The original historical logs under `logs/` are preserved unchanged.
   The intended non-root runtime user is not actually used.
 
 - Fix:
-  Planned during Phase 1: run the application containers as the dedicated
-  non-root user.
+  Created a dedicated app user/group with UID/GID 10001 in the Docker image and changed the container to run as that non-root user.
 
 - Retest evidence:
-  Not performed during Phase 1.
+  The final Dockerfile specifies USER app, and the application containers ran successfully with the non-root configuration.
 
-  Planned verification: `docker inspect` shows the non-root user
+  `docker inspect` shows the non-root user
   configuration and the application remains functional.
+  "User": "app"
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
+  059cef5 — fix: repair container networking and runtime configuration
 
-- Remaining uncertainty:
-  Runtime behavior must be verified after switching to the non-root user.
 
 ---
 
@@ -664,22 +590,15 @@ The original historical logs under `logs/` are preserved unchanged.
   directory.
 
 - Fix:
-  Planned during Phase 1: mount the named PostgreSQL volume at the actual
-  PostgreSQL data directory and remove the incorrect temporary storage
-  arrangement.
+  Corrected the PostgreSQL volume configuration so the named volume postgres-data is mounted at PostgreSQL's actual data directory /var/lib/postgresql/data.
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: create a record, recreate the application and
-  PostgreSQL containers while retaining the named volume, then verify that
-  the record remains.
+  Created persistence-test-before-recreate, then recreated PostgreSQL and both application containers using docker compose up -d --force-recreate without removing the named volume. The record was still present afterwards, proving PostgreSQL data survived container recreation.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
+  059cef5 — fix: repair container networking and runtime configuration
 
-- Remaining uncertainty:
-  Persistence must be proven through an actual recreate-and-read test.
+- Verification: bca8bbc — docs: record backup and persistence verification
 
 ---
 
@@ -715,24 +634,13 @@ The original historical logs under `logs/` are preserved unchanged.
   build context and copied into the application image.
 
 - Fix:
-  Planned during Phase 1: remove `config/app.env` from the Docker image build
-  and keep secret-bearing configuration runtime-only.
-
-  Provide a safe `.env.example` containing only non-secret placeholders and
-  defaults.
+  Removed the secret-bearing config/app.env from the Docker build context used by the image and changed the runtime configuration to be supplied through Compose env_file instead. The Dockerfile now copies only the application source and dependency files.
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: inspect the final image filesystem without printing
-  secret values and confirm that `config/app.env` is not embedded in the
-  image.
+  The final Dockerfile contains no COPY of config/app.env, and the secret-bearing runtime configuration is supplied separately at container startup.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  The final image must be inspected after the Dockerfile change.
+  059cef5 — fix: repair container networking and runtime configuration
 
 ---
 
@@ -771,22 +679,20 @@ The original historical logs under `logs/` are preserved unchanged.
   The ignore rules covered conventional `.env` paths but did not explicitly
   protect the actual secret-bearing configuration path used by this project.
 
+- Investigation finding:
+ config/app.env was already present in the supplied starter repository history, including earlier starter commits. This was therefore treated as an inherited repository issue rather than a newly introduced change.
+
 - Fix:
-  Planned during Phase 1: explicitly exclude `config/app.env` and other
-  local secret configuration from Git and Docker build contexts.
+  Removed config/app.env from the current Git index with git rm --cached, while retaining it locally for runtime use. Added config/app.env and config/postgres.env to the ignore rules and added a safe .env.example containing placeholders only.
 
 - Retest evidence:
-  Not performed during Phase 1.
+ git ls-files config/app.env no longer lists the file in the current working tree, while the local runtime configuration remains available outside Git tracking.
 
-  Planned verification: confirm the secret file is ignored by Git and Docker
-  and is not included in the Docker build context.
+- Important limitation:
+ Removing the file from the current index does not remove its historical contents from previous Git commits. The affected credentials should therefore be rotated before final submission.
 
-- Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Historical repository exposure remains a separate security-review concern;
-  current working-tree protection must be verified after the Phase 2 changes.
+- Commit:
+ 059cef5 — fix: repair container networking and runtime configuration
 
 ---
 
@@ -833,23 +739,13 @@ The original historical logs under `logs/` are preserved unchanged.
   reproducing the application's runtime configuration.
 
 - Fix:
-  Planned during Phase 1: expand `.env.example` with non-secret placeholders
-  and documented values.
-
-  No real credentials will be placed in the example file.
+  Expanded .env.example to document the required non-secret configuration and provide placeholders for database credentials instead of real secrets.
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: a fresh setup can reproduce the documented runtime
-  configuration without requiring secret values to be committed.
+  The template contains the required application, database, Redis, and public-port variables without containing real credentials.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  The final example file must be reviewed against the completed Compose
-  configuration.
+  059cef5 — fix: repair container networking and runtime configuration
 
 ---
 
@@ -888,21 +784,17 @@ The original historical logs under `logs/` are preserved unchanged.
   Redis was configured not to persist its dataset to disk.
 
 - Fix:
-  Planned during Phase 1: choose and document an appropriate Redis
-  persistence strategy for the assignment.
+  Enabled Redis AOF persistence using:
+
+`  --appendonly yes --appendfsync everysec`
+
+ and mounted the named redis-data volume at /data.
 
 - Retest evidence:
-  Not performed during Phase 1.
-
-  Planned verification: perform a persistence test against the final
-  configuration and record the result.
+  The final Compose configuration contains both the persistent Redis volume and AOF configuration.
 
 - Related commit:
-  `65cf9a396c11a5d9dd3c146b8e8ee53e21f90438` — investigation baseline.
-
-- Remaining uncertainty:
-  Redis persistence must be proven after implementing the persistence
-  strategy.
+  059cef5 — fix: repair container networking and runtime configuration
 
 ---
 
@@ -1081,7 +973,7 @@ No additional fix was required. The existing NGINX upstream configuration and ap
 `./failure_test.py` completed with `RESULT: PASS`.
 
 **Commit:**
-The verification changes will be recorded in the corresponding Git commit.
+  dbf808e - test: verify backend failure and recovery
 
 
 ## 21. PostgreSQL backup and restore verification
@@ -1099,6 +991,8 @@ The verification changes will be recorded in the corresponding Git commit.
 **Fix:** Implemented `backup.sh` using `pg_dump --format=custom` and `restore.sh` using `pg_restore`.
 
 **Retest:** Backup and restore completed successfully and database state matched the backup point.
+
+**Commit:** b3481d0 for implementation, bca8bbc - docs: record backup and persistence verification
 
 ## 22. PostgreSQL persistence across container recreation
 
@@ -1119,3 +1013,5 @@ No `docker compose down -v` or volume deletion was performed.
 **Retest:** The record remained after PostgreSQL and both application containers were recreated.
 
 **Evidence:** Before recreation the record was present; after recreation the same record was still present.
+
+**Commit:** bca8bbc - docs: record backup and persistence verification
