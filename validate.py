@@ -3,20 +3,39 @@
 """Validate the BARQ assessment environment."""
 
 import json
+import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
-import time
 
 
-BASE_URL = "http://127.0.0.1:8080"
 COMMAND_TIMEOUT = 10
 HTTP_TIMEOUT = 3
 
 passed = 0
 failed = 0
 
+def get_base_url():
+    """Use BASE_URL when supplied, otherwise derive the published port."""
+    explicit = os.getenv("BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+
+    port = "8080"
+    if os.path.exists(".env"):
+        with open(".env", encoding="utf-8") as env_file:
+            for line in env_file:
+                line = line.strip()
+                if line.startswith("PUBLIC_PORT="):
+                    port = line.split("=", 1)[1].strip()
+                    break
+
+    return f"http://127.0.0.1:{port}"
+
+
+BASE_URL = get_base_url()
 
 def pass_check(message):
     """Record and print a successful check."""
@@ -106,6 +125,19 @@ def http_post(path, payload):
     except (urllib.error.URLError, TimeoutError, OSError):
         return None, None
 
+def get_app_services():
+    """Discover declared app-* services from Compose."""
+    result = run_command(["docker", "compose", "config", "--services"])
+
+    if result is None or result.returncode != 0:
+        return set()
+
+    return {
+        service
+        for service in result.stdout.splitlines()
+        if service.startswith("app-")
+    }
+
 def check_records_write():
     """Verify that records can be written to PostgreSQL."""
     status, body = http_post(
@@ -159,7 +191,7 @@ def check_containers():
         ]
     )
 
-    required = {"nginx", "app-01", "app-02", "postgres", "redis"}
+    required = {"nginx", "postgres", "redis"} | get_app_services()
 
     if result is None or result.returncode != 0:
         for service in sorted(required):
@@ -200,9 +232,10 @@ def check_redis():
 
 def check_instances():
     """Prove that NGINX sends traffic to both application instances."""
+    expected = get_app_services()
     seen_instances = set()
 
-    for _ in range(20):
+    for _ in range(max(20, len(expected) * 10)):
         status, body = http_get("/instance")
 
         if status is None:
@@ -218,12 +251,16 @@ def check_instances():
         if instance_id:
             seen_instances.add(instance_id)
 
-    expected = {"app-01", "app-02"}
-
     if expected.issubset(seen_instances):
-        pass_check("Traffic reaches both application instances")
+        pass_check(
+            f"Traffic reaches all application instances: "
+            f"{sorted(expected)}"
+        )
     else:
-        fail_check("Traffic reaches both application instances")
+        fail_check(
+            f"Traffic reaches all application instances "
+            f"(expected={sorted(expected)}, seen={sorted(seen_instances)})"
+        )
 
 def check_network_isolation():
     """Verify NGINX is isolated from the backend network."""
@@ -262,22 +299,22 @@ def check_host_ports():
     violations = []
 
     for line in result.stdout.splitlines():
-        if not line:
+        if not line.strip():
             continue
 
-        container, _, ports = line.partition(" ")
+        name, _, ports = line.partition(" ")
 
-        if container in {"app-01", "app-02", "postgres", "redis"}:
-            if "->" in ports:
-                violations.append(container)
+        if name != "nginx" and "->" in ports:
+            violations.append(name)
 
-    if not violations:
-        pass_check("Only NGINX publishes a host port")
-    else:
+    if violations:
         fail_check(
-            "Only NGINX publishes a host port "
-            f"(unexpected published ports: {', '.join(violations)})"
+            f"Only NGINX publishes a host port "
+            f"(unexpected: {sorted(violations)})"
         )
+    else:
+        pass_check("Only NGINX publishes a host port")
+
 
 
 def main():

@@ -3,6 +3,7 @@
 """Test backend failure, continued traffic, and backend recovery."""
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -10,14 +11,32 @@ import urllib.error
 import urllib.request
 
 
-BASE_URL = "http://127.0.0.1:8080"
-APP_TO_FAIL = "app-01"
+# BASE_URL = "http://127.0.0.1:8080"
+# APP_TO_FAIL = "app-01"
 HTTP_TIMEOUT = 3
 NORMAL_REQUESTS = 10
 FAILURE_REQUESTS = 20
 RECOVERY_ATTEMPTS = 20
 RECOVERY_DELAY = 1
 
+def get_base_url():
+    explicit = os.getenv("BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+
+    port = "8080"
+    if os.path.exists(".env"):
+        with open(".env", encoding="utf-8") as env_file:
+            for line in env_file:
+                line = line.strip()
+                if line.startswith("PUBLIC_PORT="):
+                    port = line.split("=", 1)[1].strip()
+                    break
+
+    return f"http://127.0.0.1:{port}"
+
+
+BASE_URL = get_base_url()
 
 def run_command(command, timeout=10):
     """Run a command with a bounded timeout."""
@@ -32,6 +51,17 @@ def run_command(command, timeout=10):
     except (subprocess.TimeoutExpired, OSError):
         return None
 
+def get_app_services():
+    result = run_command(["docker", "compose", "config", "--services"])
+
+    if result is None or result.returncode != 0:
+        return []
+
+    return sorted(
+        service
+        for service in result.stdout.splitlines()
+        if service.startswith("app-")
+    )
 
 def request_instance():
     """Request /instance and return its status and instance ID."""
@@ -95,28 +125,28 @@ def container_is_healthy(container):
     )
 
 
-def start_backend():
+def start_backend(app_to_fail):
     """Restore the failed backend."""
     result = run_command(
-        ["docker", "compose", "start", APP_TO_FAIL]
+        ["docker", "compose", "start", app_to_fail]
     )
 
     return result is not None and result.returncode == 0
 
 
-def stop_backend():
+def stop_backend(app_to_fail):
     """Stop the backend selected for the failure test."""
     result = run_command(
-        ["docker", "compose", "stop", APP_TO_FAIL]
+        ["docker", "compose", "stop", app_to_fail]
     )
 
     return result is not None and result.returncode == 0
 
 
-def wait_for_recovery():
+def wait_for_recovery(app_to_fail):
     """Wait for the failed backend to become healthy."""
     for _ in range(RECOVERY_ATTEMPTS):
-        if container_is_healthy(APP_TO_FAIL):
+        if container_is_healthy(app_to_fail):
             return True
 
         time.sleep(RECOVERY_DELAY)
@@ -125,9 +155,28 @@ def wait_for_recovery():
 
 
 def main():
+
+    app_services = get_app_services()
+
+    if len(app_services) < 2:
+        print("FAIL: at least two application instances are required")
+        return 1
+
+    app_to_fail = os.getenv("APP_TO_FAIL", app_services[0])
+    surviving_apps = set(app_services) - {app_to_fail}
+
+    if app_to_fail not in app_services:
+        print(f"FAIL: {app_to_fail} is not a declared application service")
+        return 1
+
+
     """Run the failure and recovery test."""
     print("=== BARQ Failure / Recovery Test ===")
+    print(f"Base URL: {BASE_URL}")
+    print(f"Application instances: {app_services}")
+    print(f"Instance selected for failure: {app_to_fail}")
     print()
+
 
     print("Measuring normal traffic...")
     normal_successes, normal_failures, normal_instances = measure_traffic(
@@ -140,21 +189,21 @@ def main():
         f"errors={normal_failures}"
     )
 
-    if "app-01" not in normal_instances or "app-02" not in normal_instances:
-        print("FAIL: normal traffic did not reach both application instances")
+    if not set(app_services).issubset(normal_instances):
+        print("FAIL: normal traffic did not reach all application instances")
         return 1
 
     print()
-    print(f"Stopping {APP_TO_FAIL}...")
+    print(f"Stopping {app_to_fail}...")
 
-    if not stop_backend():
-        print(f"FAIL: could not stop {APP_TO_FAIL}")
+    if not stop_backend(app_to_fail):
+        print(f"FAIL: could not stop {app_to_fail}")
         return 1
 
     try:
         time.sleep(2)
 
-        print("Measuring traffic while app-01 is stopped...")
+        print(f"Measuring traffic while {app_to_fail} is stopped...")
         failure_successes, failure_failures, failure_instances = measure_traffic(
             FAILURE_REQUESTS
         )
@@ -165,8 +214,8 @@ def main():
             f"errors={failure_failures}"
         )
 
-        if "app-02" not in failure_instances:
-            print("FAIL: healthy app-02 did not serve traffic")
+        if not surviving_apps.intersection(failure_instances):
+            print("FAIL: healthy application instances did not serve traffic")
             return 1
 
         if failure_successes == 0:
@@ -174,26 +223,26 @@ def main():
             return 1
 
         print()
-        print(f"Restoring {APP_TO_FAIL}...")
+        print(f"Restoring {app_to_fail}...")
 
-        if not start_backend():
-            print(f"FAIL: could not start {APP_TO_FAIL}")
+        if not start_backend(app_to_fail):
+            print(f"FAIL: could not start {app_to_fail}")
             return 1
 
-        if not wait_for_recovery():
-            print(f"FAIL: {APP_TO_FAIL} did not become healthy")
+        if not wait_for_recovery(app_to_fail):
+            print(f"FAIL: {app_to_fail} did not become healthy")
             return 1
 
-        print(f"PASS: {APP_TO_FAIL} recovered and is healthy")
+        print(f"PASS: {app_to_fail} recovered and is healthy")
 
         print("Waiting for traffic to reach the recovered instance...")
 
         for attempt in range(1, RECOVERY_ATTEMPTS + 1):
             _, _, recovery_instances = measure_traffic(5)
 
-            if APP_TO_FAIL in recovery_instances:
+            if app_to_fail in recovery_instances:
                 print(
-                    f"PASS: {APP_TO_FAIL} served traffic after recovery "
+                    f"PASS: {app_to_fail} served traffic after recovery "
                     f"(attempt {attempt})"
                 )
                 print()
@@ -202,13 +251,13 @@ def main():
 
             time.sleep(RECOVERY_DELAY)
 
-        print(f"FAIL: {APP_TO_FAIL} recovered but did not receive traffic")
+        print(f"FAIL: {app_to_fail} recovered but did not receive traffic")
         return 1
 
     finally:
-        if not container_is_healthy(APP_TO_FAIL):
-            print(f"Cleanup: ensuring {APP_TO_FAIL} is running...")
-            start_backend()
+        if not container_is_healthy(app_to_fail):
+            print(f"Cleanup: ensuring {app_to_fail} is running...")
+            start_backend(app_to_fail)
 
 
 if __name__ == "__main__":
